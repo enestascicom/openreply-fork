@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { Panel } from "@/components/panel";
 import { hasDatabase, query } from "@/lib/db";
 import { isSignedIn, passwordReady } from "@/lib/auth";
-import { DEFAULT_GATE_TEXT, DM_PER_HOUR, REPLIES_PER_HOUR, hourStats, listEvents, listRules, processQueue, readIg, refreshTokenIfDue, tokenDaysLeft } from "@/lib/instagram";
+import { DEFAULT_GATE_TEXT, DM_PER_HOUR, REPLIES_PER_HOUR, hourStats, listEvents, listRules, processQueue, readIg, refreshTokenIfDue, tokenDaysLeft, usageStats } from "@/lib/instagram";
 import { siteUrl } from "@/lib/site-url";
 
 export default async function Home({ searchParams }: { searchParams: Promise<{ sayfa?: string | string[] }> }) {
@@ -11,13 +11,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
   await connection();
   if (!hasDatabase() || !passwordReady() || !(await isSignedIn())) redirect("/giris");
   const { sayfa } = await searchParams;
-  const [settings, rules, log, stats, url, [seen]] = await Promise.all([
+  const [settings, rules, log, stats, url, [seen], usage] = await Promise.all([
     readIg().then(refreshTokenIfDue),
     listRules(),
     listEvents(Number(sayfa) || 1),
     hourStats(),
     siteUrl(),
     query<{ id: number }>("SELECT id FROM ig_events LIMIT 1"),
+    usageStats(),
   ]);
   // opening the panel also sends whatever waits in the queue
   if (stats.queued) after(() => processQueue(20));
@@ -43,6 +44,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
       }))}
       log={{ page: log.page, pages: log.pages, total: log.total }}
       stats={{ ...stats, dmCap: DM_PER_HOUR, replyCap: REPLIES_PER_HOUR }}
+      usage={usage}
       defaultGateText={DEFAULT_GATE_TEXT}
     />
   );

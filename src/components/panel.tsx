@@ -7,6 +7,8 @@ import { BookOpen, Check, Copy, ListChecks, LogOut, MessageCircle, Pencil, Plus,
 import { disconnectIg, flushQueue, logout, removeIgRule, saveIgConnection, saveIgRule } from "@/app/actions";
 import { Brand } from "@/components/brand";
 import { btnGhost, btnPrimary, card, hint, input, label } from "@/lib/ui";
+import { UsageMeter } from "@/components/usage-meter";
+import type { UsageHour, UsageNow } from "@/lib/instagram";
 
 export type Connection = {
   connected: boolean;
@@ -102,6 +104,7 @@ export function Panel({
   events,
   log,
   stats,
+  usage,
   defaultGateText,
 }: {
   connection: Connection;
@@ -110,6 +113,7 @@ export function Panel({
   events: Event[];
   log: { page: number; pages: number; total: number };
   stats: Stats;
+  usage: { now: UsageNow; hours: UsageHour[] };
   defaultGateText: string;
 }) {
   const router = useRouter();
@@ -491,6 +495,14 @@ export function Panel({
               ))}
             </ul>
           )}
+        </section>
+      )}
+
+      {tab === "gonderimler" && (
+        <section className={`${card} mt-6`} id="sinirlar">
+          <h2 className="font-display text-xl font-extrabold">Saatlik kullanım ve sınırlar</h2>
+          <p className="mt-1 mb-5 text-sm text-mist">Meta&apos;nın bu uygulamaya saatte verdiği hakkın ne kadarı kullanıldı, Meta&apos;nın kendi panelindeki rakamlarla.</p>
+          <UsageMeter now={usage.now} hours={usage.hours} dms={stats.dms} dmCap={stats.dmCap} replies={stats.replies} replyCap={stats.replyCap} queued={stats.queued} />
         </section>
       )}
 

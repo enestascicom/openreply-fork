@@ -65,6 +65,18 @@ const SCHEMA = [
     seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS ig_followers_seen ON ig_followers (seen_at)`,
+  // Meta's own usage meter (X-App-Usage / X-Business-Use-Case-Usage headers), highest per hour, for the panel
+  `CREATE TABLE IF NOT EXISTS ig_usage (
+    hour TIMESTAMPTZ PRIMARY KEY,
+    calls SMALLINT NOT NULL DEFAULT 0,
+    cpu SMALLINT NOT NULL DEFAULT 0,
+    time_pct SMALLINT NOT NULL DEFAULT 0,
+    last_calls SMALLINT NOT NULL DEFAULT 0,
+    last_cpu SMALLINT NOT NULL DEFAULT 0,
+    last_time SMALLINT NOT NULL DEFAULT 0,
+    regain_min INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
   `CREATE TABLE IF NOT EXISTS login_attempts (
     id SERIAL PRIMARY KEY,
     ip VARCHAR(64) NOT NULL,

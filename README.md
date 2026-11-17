@@ -135,6 +135,10 @@ bir kez çalıştırır; ama her yeni yorum ve paneli her açışın da sırayı
 
 ## Sürüm notları
 
+**1.3.0 (18 Kasım 2026)**
+
+- **Saatlik kullanım ve sınırlar kartı** (Gönderimler sekmesi). Meta her API cevabında uygulamanın saatlik hakkından ne kadar kullanıldığını yüzde olarak gönderir; panel bunu Meta'nın kendi sayfasındaki gibi gösterir: çağrı sayısı, işlem süresi ve toplam süre, saatlik DM ve yorum cevabı sınırları, son 24 saatin saatlik en yüksek kullanımı. Sınır dolunca erişimin kaç dakika sonra açılacağı yazar. Kayıtlar 8 gün tutulur.
+
 **1.2.0 (18 Kasım 2026)**
 
 - **Takip kontrolü kişi başına hatırlanıyor.** "Sadece takip edenlere" kurallarında, takip ettiği bir kez görülen kişi 30 gün boyunca yeni yorumlarında Meta'ya tekrar sorulmaz, link doğrudan gider. Çok yorum alan bir videoda Meta'nın saatlik istek sınırına daha geç dayanılır. "Takip etmiyor" sonucu hatırlanmaz; takip ettikten sonraki kontrol her zaman yenidir.

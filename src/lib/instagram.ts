@@ -113,6 +113,8 @@ async function graph<T>(path: string, init: RequestInit & { token: string; host?
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...rest.headers },
     signal: AbortSignal.timeout(15_000),
   });
+  const usage = readUsage(res);
+  if (usage) await recordUsage(usage).catch(() => {});
   const text = await res.text();
   let data: T & GraphError & { _raw?: string };
   try {
@@ -123,6 +125,96 @@ async function graph<T>(path: string, init: RequestInit & { token: string; host?
   }
   if (!res.ok || data.error) throw new GraphFail(data.error?.message ?? `Instagram ${res.status}: ${text.slice(0, 200)}`, data.error?.code, res.status);
   return data;
+}
+
+// ---------- Meta's usage meter ----------
+// Every Graph answer carries how much of the app's hourly allowance is used, in percent: X-App-Usage (app level) and
+// X-Business-Use-Case-Usage (per account, with the minutes until access comes back once it hits 100). The highest of
+// each per hour is kept for the panel's meter, the same numbers Meta's own rate-limit page draws.
+type UsageSample = { calls: number; cpu: number; time: number; regainMin: number };
+type UsageEntry = { call_count?: number; total_cputime?: number; total_time?: number; estimated_time_to_regain_access?: number };
+
+function readUsage(res: Response): UsageSample | null {
+  const out: UsageSample = { calls: 0, cpu: 0, time: 0, regainMin: 0 };
+  let seen = false;
+  const take = (u: UsageEntry) => {
+    out.calls = Math.max(out.calls, Number(u.call_count) || 0);
+    out.cpu = Math.max(out.cpu, Number(u.total_cputime) || 0);
+    out.time = Math.max(out.time, Number(u.total_time) || 0);
+    out.regainMin = Math.max(out.regainMin, Number(u.estimated_time_to_regain_access) || 0);
+    seen = true;
+  };
+  try {
+    const app = res.headers.get("x-app-usage");
+    if (app) take(JSON.parse(app) as UsageEntry);
+    const buc = res.headers.get("x-business-use-case-usage");
+    if (buc) for (const list of Object.values(JSON.parse(buc) as Record<string, UsageEntry[]>)) for (const u of list ?? []) take(u);
+  } catch {
+    // a header Meta changed the shape of is not worth failing a DM over
+  }
+  return seen ? out : null;
+}
+
+let usageWrittenAt = 0;
+let usageWrittenPeak = -1;
+async function recordUsage(u: UsageSample) {
+  // a busy hour makes hundreds of calls: write when the meter rose, otherwise at most every 15 seconds
+  const peak = Math.max(u.calls, u.cpu, u.time);
+  if (Date.now() - usageWrittenAt < 15_000 && peak <= usageWrittenPeak) return;
+  usageWrittenAt = Date.now();
+  usageWrittenPeak = peak;
+  const v = [u.calls, u.cpu, u.time].map((x) => Math.min(30_000, Math.round(x)));
+  await execute(
+    `INSERT INTO ig_usage (hour, calls, cpu, time_pct, last_calls, last_cpu, last_time, regain_min, updated_at)
+     VALUES (date_trunc('hour', now()), ?, ?, ?, ?, ?, ?, ?, now())
+     ON CONFLICT (hour) DO UPDATE SET calls = GREATEST(ig_usage.calls, EXCLUDED.calls), cpu = GREATEST(ig_usage.cpu, EXCLUDED.cpu),
+       time_pct = GREATEST(ig_usage.time_pct, EXCLUDED.time_pct), last_calls = EXCLUDED.last_calls, last_cpu = EXCLUDED.last_cpu,
+       last_time = EXCLUDED.last_time, regain_min = EXCLUDED.regain_min, updated_at = now()`,
+    [...v, ...v, Math.round(u.regainMin)],
+  );
+  if (Math.random() < 0.02) await execute("DELETE FROM ig_usage WHERE hour < now() - interval '8 days'");
+}
+
+export type UsageHour = { hour: string; peak: number; dms: number; replies: number };
+/** Meta's latest reading; fresh = taken in the last hour (older readings say nothing about now), agoMin = its age */
+export type UsageNow = { calls: number; cpu: number; time: number; regainMin: number; at: string; fresh: boolean; agoMin: number } | null;
+
+/** The meter for the panel: Meta's latest reading, and the last 24 hours hour by hour (Meta's peak, our DMs and answers). */
+export async function usageStats(): Promise<{ now: UsageNow; hours: UsageHour[] }> {
+  const [last] = await query<{ last_calls: number; last_cpu: number; last_time: number; regain_min: number; updated_at: Date }>(
+    "SELECT last_calls, last_cpu, last_time, regain_min, updated_at FROM ig_usage ORDER BY hour DESC LIMIT 1",
+  );
+  const meta = await query<{ h: Date; peak: number }>(
+    "SELECT hour AS h, GREATEST(calls, cpu, time_pct) AS peak FROM ig_usage WHERE hour >= date_trunc('hour', now()) - interval '23 hours'",
+  );
+  const ours = await query<{ h: Date; dms: string; replies: string }>(
+    `SELECT date_trunc('hour', sent_at) AS h, COUNT(*) AS dms, SUM(replied) AS replies FROM ig_events
+     WHERE sent_at >= date_trunc('hour', now()) - interval '23 hours' GROUP BY 1`,
+  );
+  const hours: UsageHour[] = [];
+  const top = new Date();
+  top.setUTCMinutes(0, 0, 0);
+  for (let i = 23; i >= 0; i--) {
+    const t = top.getTime() - i * 3_600_000;
+    const m = meta.find((r) => new Date(r.h).getTime() === t), o = ours.find((r) => new Date(r.h).getTime() === t);
+    hours.push({ hour: new Date(t).toISOString(), peak: Number(m?.peak ?? 0), dms: Number(o?.dms ?? 0), replies: Number(o?.replies ?? 0) });
+  }
+  const at = last ? new Date(last.updated_at) : null;
+  return {
+    now:
+      last && at
+        ? {
+            calls: Number(last.last_calls),
+            cpu: Number(last.last_cpu),
+            time: Number(last.last_time),
+            regainMin: Number(last.regain_min),
+            at: at.toISOString(),
+            fresh: Date.now() - at.getTime() < 3_600_000,
+            agoMin: Math.max(0, Math.round((Date.now() - at.getTime()) / 60_000)),
+          }
+        : null,
+    hours,
+  };
 }
 
 /** A Graph API error with Meta's error code and the HTTP status, so a failed send can be sorted (retry or not). */
