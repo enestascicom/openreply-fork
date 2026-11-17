@@ -28,10 +28,29 @@ html {
 
 body {
   background:
-    radial-gradient(1200px 600px at 85% -10%, rgb(214 42 13 / 0.16), transparent 60%),
+    radial-gradient(900px 520px at 88% -8%, rgb(240 69 31 / 0.22), transparent 62%),
+    radial-gradient(800px 600px at -10% 105%, rgb(88 80 236 / 0.16), transparent 60%),
     var(--navy);
+  background-attachment: fixed;
   color: #fff;
   min-height: 100dvh;
+}
+
+/* "Reply" in the logo and other highlights: the orange of the mark as a gradient */
+.text-brand-grad {
+  background: linear-gradient(100deg, #ff8a4c, #f0451f 55%, #e0300f);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* a card that sits a little above the page: soft top highlight and a faint orange glow */
+.card-glow {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.05), transparent 40%), var(--navy-1);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.08),
+    0 30px 80px -30px rgb(240 69 31 / 0.35),
+    0 20px 50px -20px rgb(0 0 0 / 0.6);
 }
 
 ::selection {

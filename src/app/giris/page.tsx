@@ -13,9 +13,12 @@ export default async function LoginPage() {
   if (passwordReady() && hasDatabase() && (await isSignedIn())) redirect("/");
   const missing = [!hasDatabase() && "DATABASE_URL (Postgres veritabanı)", !passwordReady() && "ADMIN_PASSWORD (en az 10 karakter)"].filter(Boolean);
   return (
-    <main className="mx-auto grid max-w-[420px] px-4 pt-20">
-      <Brand />
-      <div className={`${card} mt-6`}>
+    <main className="mx-auto grid max-w-[420px] px-4 pt-16 sm:pt-24">
+      <div className="grid justify-items-center text-center">
+        <Brand size="lg" />
+        <p className="mt-3 text-sm text-mist">Instagram yorumlarına otomatik DM</p>
+      </div>
+      <div className={`${card} card-glow mt-8`}>
         <h1 className="font-display text-2xl font-extrabold">Panele giriş</h1>
         {missing.length ? (
           <div className="mt-4 text-sm text-mist">

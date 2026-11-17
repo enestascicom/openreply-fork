@@ -135,6 +135,11 @@ bir kez çalıştırır; ama her yeni yorum ve paneli her açışın da sırayı
 
 ## Sürüm notları
 
+**1.2.0 (18 Kasım 2026)**
+
+- **Takip kontrolü kişi başına hatırlanıyor.** "Sadece takip edenlere" kurallarında, takip ettiği bir kez görülen kişi 30 gün boyunca yeni yorumlarında Meta'ya tekrar sorulmaz, link doğrudan gider. Çok yorum alan bir videoda Meta'nın saatlik istek sınırına daha geç dayanılır. "Takip etmiyor" sonucu hatırlanmaz; takip ettikten sonraki kontrol her zaman yenidir.
+- Yeni logo ve uygulama simgesi; giriş ekranı, arka plan ve butonların renkleri tazelendi.
+
 **1.1.0 (14 Kasım 2026)**
 
 - Kurala gönderi kimliği yerine **videonun linki** yazılıyor. Kaydederken link hesabındaki gönderilerde aranır; bulunamazsa kural kaydedilmez ve nedenini söyler. Eski, kimlikle yazılmış kurallar çalışmaya devam eder.

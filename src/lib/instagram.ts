@@ -351,6 +351,24 @@ const SAME_PERSON_DAYS = 30;
 const REPLY_WINDOW_DAYS = 7;
 /** Wait before each retry (minutes); after the last one the comment is given up. */
 const BACKOFF_MIN = [2, 5, 15, 30, 60, 120, 240, 480, 720];
+/**
+ * A follow Instagram confirmed is remembered this long, so a busy post asks Meta about each person once instead of on
+ * every comment. "Not following" is never remembered: after the "follow me" message the next check must be fresh.
+ */
+const FOLLOW_MEMORY_DAYS = 30;
+
+async function knownFollower(igUserId: string) {
+  const [row] = await query("SELECT 1 FROM ig_followers WHERE ig_user_id = ? AND seen_at > now() - make_interval(days => ?)", [
+    igUserId.slice(0, 40),
+    FOLLOW_MEMORY_DAYS,
+  ]);
+  return Boolean(row);
+}
+async function rememberFollower(igUserId: string) {
+  await execute("INSERT INTO ig_followers (ig_user_id, seen_at) VALUES (?, now()) ON CONFLICT (ig_user_id) DO UPDATE SET seen_at = now()", [
+    igUserId.slice(0, 40),
+  ]);
+}
 
 type EventRow = IgEvent & { ig_user_id: string; account_id: string; attempts: number; age_days: number };
 
@@ -387,6 +405,7 @@ export async function handleComment(accountId: string, c: CommentChange) {
   if (!eventId) return;
   // records are kept for at most 90 days (the privacy page says so)
   await execute("DELETE FROM ig_events WHERE created_at < now() - interval '90 days'");
+  await execute("DELETE FROM ig_followers WHERE seen_at < now() - make_interval(days => ?)", [FOLLOW_MEMORY_DAYS]);
 
   // Someone who comments "link" three times gets one DM. Only earlier rows count, so two comments arriving at the
   // same moment cannot both skip each other.
@@ -434,12 +453,19 @@ async function deliver(ev: EventRow, rule: IgRule) {
   // with a button, and falls back to plain text if Instagram refuses the button.
   let gated = Boolean(rule.follow_gate);
   // Instagram may already tell us the commenter follows: then the link goes straight away, no button step.
+  // A follow seen in the last 30 days is taken as it is, without asking Meta again.
   if (gated && ev.ig_user_id) {
-    const p = await graph<{ is_user_follow_business?: boolean }>(`/${encodeURIComponent(ev.ig_user_id)}?fields=is_user_follow_business`, {
-      token: s.token!,
-      host: s.host,
-    }).catch(() => ({}) as { is_user_follow_business?: boolean });
-    if (p.is_user_follow_business === true) gated = false;
+    if (await knownFollower(ev.ig_user_id)) gated = false;
+    else {
+      const p = await graph<{ is_user_follow_business?: boolean }>(`/${encodeURIComponent(ev.ig_user_id)}?fields=is_user_follow_business`, {
+        token: s.token!,
+        host: s.host,
+      }).catch(() => ({}) as { is_user_follow_business?: boolean });
+      if (p.is_user_follow_business === true) {
+        gated = false;
+        await rememberFollower(ev.ig_user_id);
+      }
+    }
   }
   const gateText = rule.gate_text || DEFAULT_GATE_TEXT;
   const messages = gated ? [gateMessage(gateText, ev.id), gatePlain(gateText)] : [{ text: rule.dm_text }];
@@ -649,6 +675,7 @@ export async function handleMessage(accountId: string, m: IncomingMessage) {
   const unknown = typeof follows !== "boolean";
   try {
     if (follows || unknown) {
+      if (follows) await rememberFollower(sender);
       await sendDm({ text: rule.dm_text });
       await execute("UPDATE ig_events SET status = 'sent', ig_user_id = ?, error = ? WHERE id = ?", [
         sender.slice(0, 40),

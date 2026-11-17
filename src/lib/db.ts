@@ -59,6 +59,12 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS ig_events_sent ON ig_events (sent_at)`,
   `CREATE INDEX IF NOT EXISTS ig_events_rule_user ON ig_events (rule_id, ig_user_id)`,
   `CREATE INDEX IF NOT EXISTS ig_events_status_next ON ig_events (status, next_try_at)`,
+  // people Instagram confirmed follow the account (follow-gated rules): a busy post asks Meta once per person
+  `CREATE TABLE IF NOT EXISTS ig_followers (
+    ig_user_id VARCHAR(40) PRIMARY KEY,
+    seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS ig_followers_seen ON ig_followers (seen_at)`,
   `CREATE TABLE IF NOT EXISTS login_attempts (
     id SERIAL PRIMARY KEY,
     ip VARCHAR(64) NOT NULL,
