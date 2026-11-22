@@ -4,11 +4,11 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BookOpen, Check, Copy, ListChecks, LogOut, MessageCircle, Pencil, Plus, Send, Trash2 } from "lucide-react";
-import { disconnectIg, flushQueue, logout, removeIgRule, saveIgConnection, saveIgRule } from "@/app/actions";
+import { disconnectIg, flushIgQueue, logout, removeIgRule, saveIgConnection, saveIgRule } from "@/app/actions";
 import { Brand } from "@/components/brand";
 import { btnGhost, btnPrimary, card, hint, input, label } from "@/lib/ui";
 import { UsageMeter } from "@/components/usage-meter";
-import type { UsageHour, UsageNow } from "@/lib/instagram";
+import type { CallTally, UsageHour, UsageNow } from "@/lib/instagram";
 
 export type Connection = {
   connected: boolean;
@@ -19,6 +19,8 @@ export type Connection = {
   siteUrl: string;
   /** a matching comment has reached the webhook at least once, so Meta is wired up */
   webhookSeen: boolean;
+  /** what the last look for the Facebook Page's token found (Facebook-side tokens only) */
+  pageNote: string;
 };
 export type Rule = {
   id: number;
@@ -40,6 +42,7 @@ type Tab = "rehber" | "kurallar" | "gonderimler";
 const EMPTY: Draft = { keywords: "", mediaId: "", dmText: "", replyText: "", active: true, followGate: false, gateText: "" };
 /** "instagram.com/reel/Dabc…/" → "reel/Dabc…", short enough for the rule's line */
 const shortLink = (url: string) => url.replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").replace(/\/+$/, "");
+const RULES_PER_PAGE = 5;
 const logHref = (page: number) => (page > 1 ? `/?sayfa=${page}` : "/");
 const when = (iso: string) => new Date(iso).toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" });
 
@@ -47,6 +50,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   sent: { label: "Gönderildi", cls: "bg-emerald-400/15 text-emerald-300" },
   retry: { label: "Kuyrukta", cls: "bg-amber-400/15 text-amber-300" },
   gated: { label: "Takip bekleniyor", cls: "bg-violet-400/15 text-violet-300" },
+  tapped: { label: "Link sırada", cls: "bg-amber-400/15 text-amber-200" },
   sending: { label: "Gönderiliyor", cls: "bg-sky-400/15 text-sky-300" },
   skipped: { label: "Atlandı", cls: "bg-white/8 text-mist" },
   failed: { label: "Hata", cls: "bg-brand/20 text-[#ff9b85]" },
@@ -113,7 +117,7 @@ export function Panel({
   events: Event[];
   log: { page: number; pages: number; total: number };
   stats: Stats;
-  usage: { now: UsageNow; hours: UsageHour[] };
+  usage: { now: UsageNow; hours: UsageHour[]; tally: CallTally };
   defaultGateText: string;
 }) {
   const router = useRouter();
@@ -125,6 +129,11 @@ export function Panel({
   const [draft, setDraft] = useState<Draft | null>(null);
   const ready = connection.connected && connection.hasSecret;
   const [tab, setTab] = useState<Tab>(log.page > 1 ? "gonderimler" : ready ? "kurallar" : "rehber");
+  // the rules, five to a page; each keeps its number in the whole list (1 = newest)
+  const [rulePage, setRulePage] = useState(1);
+  const rulePages = Math.max(1, Math.ceil(rules.length / RULES_PER_PAGE));
+  const ruleAt = Math.min(rulePage, rulePages);
+  const ruleFrom = (ruleAt - 1) * RULES_PER_PAGE;
 
   const run = (fn: () => Promise<{ ok: boolean; message: string }>, after?: () => void) =>
     start(async () => {
@@ -268,6 +277,7 @@ export function Panel({
               </div>
             </form>
             <p className="text-sm text-mist">Token 60 gün geçerlidir; sistem süresi dolmadan kendisi yeniler.</p>
+            {connection.pageNote && <p className="text-sm text-mist">{connection.pageNote}</p>}
           </Step>
 
           <Step n={4} title="Webhook'u bağla" done={connection.webhookSeen}>
@@ -332,8 +342,9 @@ export function Panel({
                 <b className="text-white">&quot;Token geçersiz&quot;:</b> 3. adımdan yeni token üretip yapıştır.
               </li>
               <li>
-                <b className="text-white">Çok yorum geldi, bazıları bekliyor:</b> Meta saatte yaklaşık 750 DM&apos;ye izin veriyor; sistem 600&apos;de durur,
-                gerisini sıraya alır ve sırayla gönderir.
+                <b className="text-white">Çok yorum geldi, bazıları bekliyor:</b> Meta saatte yaklaşık 750 DM&apos;ye izin veriyor; gerisi sıraya alınır ve
+                sırayla gönderilir. Meta &quot;sınır doldu&quot; derse gönderim birkaç dakika durur, yorumlar kuyrukta bekler; Gönderimler sekmesindeki
+                &quot;Kuyruğu şimdi gönder&quot; ile hemen yeniden denenebilir.
               </li>
             </ul>
           </li>
@@ -345,7 +356,14 @@ export function Panel({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-display text-xl font-extrabold">Kurallar</h2>
             {!draft && (
-              <button type="button" className={btnPrimary} onClick={() => setDraft(EMPTY)}>
+              <button
+                type="button"
+                className={btnPrimary}
+                onClick={() => {
+                  setDraft(EMPTY);
+                  setRulePage(1);
+                }}
+              >
                 <Plus className="size-4" /> Yeni kural
               </button>
             )}
@@ -426,9 +444,10 @@ export function Panel({
             <p className="mt-4 text-sm text-mist">Henüz kural yok. İlk kuralı ekle: örneğin &quot;link&quot; yazana rehberinin adresini gönder.</p>
           ) : (
             <ul className="mt-5 grid gap-3">
-              {rules.map((r) => (
+              {rules.slice(ruleFrom, ruleFrom + RULES_PER_PAGE).map((r, i) => (
                 <li key={r.id} className={`rounded-2xl bg-navy p-4 ring-1 ring-white/8 ${r.active ? "" : "opacity-55"}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
+                    <span className="grid size-7 shrink-0 place-items-center rounded-full bg-white/8 text-xs font-semibold tabular-nums text-mist">{ruleFrom + i + 1}</span>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap gap-1.5">
                         {r.keywords
@@ -495,6 +514,22 @@ export function Panel({
               ))}
             </ul>
           )}
+          {rulePages > 1 && (
+            <nav aria-label="Kural sayfaları" className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-sm">
+              {Array.from({ length: rulePages }, (_, i) => i + 1).map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  aria-current={n === ruleAt ? "page" : undefined}
+                  onClick={() => setRulePage(n)}
+                  className={`grid size-9 place-items-center rounded-full tabular-nums ${n === ruleAt ? "bg-brand font-semibold text-white" : "text-mist hover:bg-white/8 hover:text-white"}`}
+                >
+                  {n}
+                </button>
+              ))}
+              <span className="ml-2 text-xs text-mist tabular-nums">{rules.length} kural</span>
+            </nav>
+          )}
         </section>
       )}
 
@@ -503,6 +538,19 @@ export function Panel({
           <h2 className="font-display text-xl font-extrabold">Saatlik kullanım ve sınırlar</h2>
           <p className="mt-1 mb-5 text-sm text-mist">Meta&apos;nın bu uygulamaya saatte verdiği hakkın ne kadarı kullanıldı, Meta&apos;nın kendi panelindeki rakamlarla.</p>
           <UsageMeter now={usage.now} hours={usage.hours} dms={stats.dms} dmCap={stats.dmCap} replies={stats.replies} replyCap={stats.replyCap} queued={stats.queued} />
+          {Object.keys(usage.tally).length > 0 && (
+            <p className="mt-4 text-xs text-mist">
+              Bu saat Meta&apos;ya giden istekler:{" "}
+              {Object.entries(usage.tally)
+                .sort((a, b) => b[1].ms - a[1].ms)
+                .map(
+                  ([k, v]) =>
+                    `${k} ${v.n} istek, ${(v.ms / 1000).toFixed(1)} sn (${v.page ? `sayfa token'ı ${v.page}` : ""}${v.page && v.user ? ", " : ""}${v.user ? `kayıtlı token ${v.user}` : ""}; uygulama sayacı ${v.appSeen ? `%${v.app}` : "yok"}, işletme sayacı ${v.bucSeen ? `%${v.buc}` : "yok"})`,
+                )
+                .join(" · ")}
+              .
+            </p>
+          )}
         </section>
       )}
 
@@ -513,8 +561,8 @@ export function Panel({
               Son gönderimler {log.total > 0 && <span className="ml-1 text-xs font-normal text-mist tabular-nums">{log.total} kayıt</span>}
             </h2>
             {stats.queued > 0 && (
-              <button type="button" disabled={pending} className={btnGhost} onClick={() => run(flushQueue)}>
-                <Send className="size-4" /> Sırayı şimdi gönder
+              <button type="button" disabled={pending} className={btnGhost} onClick={() => run(flushIgQueue)}>
+                <Send className="size-4" /> {pending ? "Gönderiliyor…" : `Kuyruğu şimdi gönder (${stats.queued})`}
               </button>
             )}
           </div>

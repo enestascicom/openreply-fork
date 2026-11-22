@@ -64,7 +64,7 @@ export function UsageMeter({
           )}
         </div>
         <div className="grid content-start gap-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-mist">Bizim sınırlarımız (bu saat)</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-mist">Gönderilenler (bu saat, Meta sınırı)</h3>
           <Bar name="DM" value={dms} max={dmCap} note={queued ? `${queued} yorum kuyrukta, sırayla gidecek.` : "Sınırı aşanlar kuyrukta bekler."} />
           <Bar name="Yoruma açık cevap" value={replies} max={replyCap} note="Sınırı geçince açık cevap atlanır, DM yine gider." />
         </div>

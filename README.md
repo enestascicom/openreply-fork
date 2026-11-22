@@ -135,6 +135,15 @@ bir kez çalıştırır; ama her yeni yorum ve paneli her açışın da sırayı
 
 ## Sürüm notları
 
+**1.4.0 (22 Kasım 2026)**
+
+- **Sayfa token'ı ve Meta sınırı.** Facebook tarafı bir token kaydedilince, Instagram hesabının bağlı olduğu Facebook sayfasının kendi token'ı alınır ve istekler onunla gider; böylece uygulamanın küçük saatlik hakkına değil, Instagram'ın geniş sınırına yazılır. Sayfa token'ı reddedilirse kayıtlı token'a dönülür. Meta "sınır doldu" derse gönderim birkaç dakika durur, yorumlar deneme hakkı harcamadan kuyrukta bekler. Instagram girişiyle alınan token'lar (`IGAA…`) eskisi gibi çalışır.
+- **Takip sorusu yok, düğme yeterli.** "Sadece takip edenlere" kurallarında Instagram'a artık ne yorum gelince ne de "Takip ettim ✅"e basılınca takip sorulur: düğmeye basan linki hemen alır. Yoğun bir videoda Meta'nın hakkını dolduran istek buydu. İstenirse `src/lib/instagram.ts` başındaki iki ayarla geri açılır.
+- **"Link sırada".** Meta sınırı doluyken düğmeye basanlar kaybolmaz; kayıt "Link sırada" olarak bekler, sınır açılınca link kendiliğinden gider. Kuyruk önce bunlara, sonra en yeni yorumlardan başlayarak sekizer sekizer gönderir.
+- **Kuyruğu şimdi gönder (n).** Gönderimler sekmesindeki düğme bekleyenlerin hepsini beklemeden dener ve sonucu söyler. Mesaj izni olmayan bir token yüzünden hataya düşen yorumlar yeni token kaydedilince yeniden sıraya alınır.
+- Kurallar **beşer beşer sayfalanıyor**, her kuralın sıra numarası var.
+- Kullanım kartının altında bu saatin **istek türleri ve sayaç satırı**: her istek türünün sayısı, süresi, hangi token'la gittiği ve Meta'nın uygulama ve işletme sayaçlarındaki en yüksek değer. Kendi saatlik sınırlarımız kalktı; DM ve açık cevap için Meta'nın 750 rakamı geçerli.
+
 **1.3.0 (18 Kasım 2026)**
 
 - **Saatlik kullanım ve sınırlar kartı** (Gönderimler sekmesi). Meta her API cevabında uygulamanın saatlik hakkından ne kadar kullanıldığını yüzde olarak gönderir; panel bunu Meta'nın kendi sayfasındaki gibi gösterir: çağrı sayısı, işlem süresi ve toplam süre, saatlik DM ve yorum cevabı sınırları, son 24 saatin saatlik en yüksek kullanımı. Sınır dolunca erişimin kaç dakika sonra açılacağı yazar. Kayıtlar 8 gün tutulur.

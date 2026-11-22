@@ -2,7 +2,19 @@
 
 import { requireOwner, signIn, signOut } from "@/lib/auth";
 import { execute, query } from "@/lib/db";
-import { cleanToken, findMedia, processQueue, readIg, whoAmI, writeIg } from "@/lib/instagram";
+import {
+  clearMetaPause,
+  cleanToken,
+  findMedia,
+  findPageTokenNow,
+  hourStats,
+  processQueue,
+  readIg,
+  requeuePermissionFailures,
+  seesPage,
+  whoAmI,
+  writeIg,
+} from "@/lib/instagram";
 import { redirect } from "next/navigation";
 
 export type IgState = { ok: boolean; message: string };
@@ -24,18 +36,38 @@ export async function saveIgConnection(input: { token: string; appSecret: string
     s.appSecret = appSecret;
     await writeIg(s);
   }
+  let asSource = false;
   if (token) {
     try {
       const me = await whoAmI(token, accountId || s.userId);
-      Object.assign(s, {
-        token,
-        host: me.host,
-        userId: me.userId,
-        username: me.username,
-        tokenSavedAt: new Date().toISOString(),
-        // Instagram-login tokens from the Meta app's "Generate token" button last 60 days; system-user tokens never expire
-        tokenExpiresAt: me.host === "instagram" ? new Date(Date.now() + 60 * 86_400_000).toISOString() : undefined,
-      });
+      // A Facebook-side token that cannot read the Instagram account itself (one made in Graph API Explorer reaches
+      // it only through its Page) never replaces a working Facebook-side token: it is kept as the source the Page's
+      // token is read with. The same goes for one that does see the Page: the saved token stays as the fallback, and
+      // only the Page's token is taken from the new one. If it sees no Page either, nothing changes.
+      if (s.token && s.host === "facebook" && me.host === "facebook") {
+        const page = s.userId ? await seesPage(token, s.userId) : "no";
+        asSource = page !== "no" || !me.seesAccount;
+      }
+      if (asSource) Object.assign(s, { pageSource: token, pageSourceShort: true, pageToken: undefined, pageNote: undefined, pageCheckedAt: undefined });
+      else
+        Object.assign(s, {
+          pageSource: undefined,
+          pageSourceShort: undefined,
+          token,
+          host: me.host,
+          userId: me.userId,
+          username: me.username || s.username,
+          tokenSavedAt: new Date().toISOString(),
+          // a Facebook-side token may come from the login dialog (an hour or two): exchanged for a long-lived one
+          // before the Page token is read with it
+          tokenShort: me.host === "facebook",
+          // a new token: the Page's token is looked up again with it
+          pageToken: undefined,
+          pageNote: undefined,
+          pageCheckedAt: undefined,
+          // Instagram-login tokens from the Meta app's "Generate token" button last 60 days; system-user tokens never expire
+          tokenExpiresAt: me.host === "instagram" ? new Date(Date.now() + 60 * 86_400_000).toISOString() : undefined,
+        });
     } catch (e) {
       return {
         ok: false,
@@ -45,12 +77,21 @@ export async function saveIgConnection(input: { token: string; appSecret: string
   }
   if (appSecret) s.appSecret = appSecret;
   await writeIg(s);
+  // with a new token the Page's own token is looked up at once, and whatever waits in the queue (or failed for the
+  // old token's missing permission) is tried again right away
+  let pageNote = "";
+  if (token) {
+    await requeuePermissionFailures().catch(() => {});
+    await execute("UPDATE ig_events SET next_try_at = now() WHERE status IN ('retry','tapped')").catch(() => {});
+    pageNote = await findPageTokenNow().catch(() => "");
+    void processQueue(100).catch(() => {});
+  }
   return {
     ok: true,
     message: token
-      ? s.username
-        ? `Bağlandı: @${s.username}`
-        : "Token kaydedildi. Hesap adı ilk yorum geldiğinde görünecek."
+      ? asSource
+        ? pageNote || "Token sayfa token'ı kaynağı olarak alındı; kayıtlı token değişmedi."
+        : `${s.username ? `Bağlandı: @${s.username}.` : "Token kaydedildi. Hesap adı ilk yorum geldiğinde görünecek."} ${pageNote}`.trim()
       : "Gizli anahtar kaydedildi.",
   };
 }
@@ -129,9 +170,15 @@ export async function logout() {
   redirect("/giris");
 }
 
-/** "Sırayı şimdi gönder" in the panel: sends what waits in the queue right away. */
-export async function flushQueue(): Promise<IgState> {
+/** "Kuyruğu şimdi gönder" in the panel: sends everything that waits in the queue now instead of at each row's next try. */
+export async function flushIgQueue(): Promise<IgState> {
   await requireOwner();
-  await processQueue(40);
-  return { ok: true, message: "Sıradaki DM'ler gönderildi (Meta'nın saatlik sınırı içinde)." };
+  clearMetaPause();
+  await requeuePermissionFailures();
+  await execute("UPDATE ig_events SET next_try_at = now() WHERE status IN ('retry','tapped')");
+  await processQueue(100);
+  const { queued } = await hourStats();
+  return queued
+    ? { ok: true, message: `${queued} yorum hâlâ kuyrukta: Meta şu an kabul etmedi, birkaç dakika içinde yeniden denenecek.` }
+    : { ok: true, message: "Kuyruk boşaldı, bekleyenlerin hepsine gönderildi." };
 }

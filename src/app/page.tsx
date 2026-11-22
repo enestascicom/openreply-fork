@@ -29,6 +29,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ s
         username: settings.username ?? "",
         daysLeft: tokenDaysLeft(settings),
         hasSecret: Boolean(settings.appSecret),
+        pageNote: settings.pageNote ?? "",
         verifyToken: settings.verifyToken ?? "",
         siteUrl: url,
         webhookSeen: Boolean(seen),
