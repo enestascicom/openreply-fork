@@ -135,6 +135,14 @@ bir kez çalıştırır; ama her yeni yorum ve paneli her açışın da sırayı
 
 ## Sürüm notları
 
+**1.5.0 (24 Kasım 2026)**
+
+- **Aralıklı gönderim.** DM'ler artık saatte en çok 130 olacak şekilde eşit aralıklarla gider (yaklaşık 28 saniyede bir); ilk mesaj, "takip et" mesajı ve link aynı sıraya girer. Instagram bir hesabı Meta'nın yazdığı saatlik 750'nin çok altında kısıyor ve bunu söylemiyor: bizde saatte 150 ila 200'de reddetmeye başladı, 130 sorunsuz gitti. Rakam `DM_PACE_PER_HOUR` ortam değişkeniyle değişir, `0` aralığı kapatır. Son gönderim veritabanından okunduğu için Vercel gibi sunucusuz ortamlarda da aynı hız korunur.
+- **Kimse atlanmaz, sıra geliş sırası.** Kuyruk artık en eski yorumdan başlar ve tek tek gönderir. Kuyrukta bekleyen varken gelen yeni yorum sıranın sonuna girer. "Takip ettim ✅"e basanlar her turda öne alınır ve linkleri için bir sonraki boş aralık ayrılır.
+- **Instagram kısınca kendiliğinden durur.** Instagram hesabı kısarken yeni yazışmaları "yazışma sahibi bu konuşmayı arşivledi veya sildi" diye reddediyor. On dakika içinde üç farklı kişide bu cevap gelirse gönderim 30 dakika durur ve haber verilir. Bu cevap artık kalıcı hata sayılmaz, yeniden denenir; son iki günde bu yüzden hataya düşenler yeniden sıraya alınır.
+- **Daha uzun bekleme.** Meta "istek sınırı doldu" dediğinde gönderim 3 değil 15 dakika durur, kısa süre sonra yine reddedilirse 30 dakika. Reddedilen her istek de sayaca yazıldığı için kısa aralıklı denemeler sınırı saatlerce dolu tutuyordu. Bekleme artık sayfa token'ıyla giden istekler için de geçerli.
+- Panel **telefonda sağa kaymıyor**: boşluksuz uzun bir link içeren kural ya da hata satırı artık kartı genişletmiyor.
+
 **1.4.0 (22 Kasım 2026)**
 
 - **Sayfa token'ı ve Meta sınırı.** Facebook tarafı bir token kaydedilince, Instagram hesabının bağlı olduğu Facebook sayfasının kendi token'ı alınır ve istekler onunla gider; böylece uygulamanın küçük saatlik hakkına değil, Instagram'ın geniş sınırına yazılır. Sayfa token'ı reddedilirse kayıtlı token'a dönülür. Meta "sınır doldu" derse gönderim birkaç dakika durur, yorumlar deneme hakkı harcamadan kuyrukta bekler. Instagram girişiyle alınan token'lar (`IGAA…`) eskisi gibi çalışır.

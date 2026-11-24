@@ -342,9 +342,10 @@ export function Panel({
                 <b className="text-white">&quot;Token geçersiz&quot;:</b> 3. adımdan yeni token üretip yapıştır.
               </li>
               <li>
-                <b className="text-white">Çok yorum geldi, bazıları bekliyor:</b> Meta saatte yaklaşık 750 DM&apos;ye izin veriyor; gerisi sıraya alınır ve
-                sırayla gönderilir. Meta &quot;sınır doldu&quot; derse gönderim birkaç dakika durur, yorumlar kuyrukta bekler; Gönderimler sekmesindeki
-                &quot;Kuyruğu şimdi gönder&quot; ile hemen yeniden denenebilir.
+                <b className="text-white">Çok yorum geldi, bazıları bekliyor:</b> DM&apos;ler saatte en çok 130 olacak şekilde aralıklı gider (Instagram, Meta&apos;nın
+                yazdığı 750&apos;nin çok altında hesabı kısıyor); gerisi sıraya alınır ve geliş sırasıyla gönderilir, kimse atlanmaz. Meta &quot;sınır doldu&quot;
+                derse ya da Instagram hesabı kısarsa gönderim 15 ila 30 dakika durur, yorumlar kuyrukta bekler; Gönderimler sekmesindeki &quot;Kuyruğu şimdi
+                gönder&quot; ile hemen yeniden denenebilir.
               </li>
             </ul>
           </li>
@@ -443,9 +444,9 @@ export function Panel({
           {rules.length === 0 && !draft ? (
             <p className="mt-4 text-sm text-mist">Henüz kural yok. İlk kuralı ekle: örneğin &quot;link&quot; yazana rehberinin adresini gönder.</p>
           ) : (
-            <ul className="mt-5 grid gap-3">
+            <ul className="mt-5 grid grid-cols-1 gap-3">
               {rules.slice(ruleFrom, ruleFrom + RULES_PER_PAGE).map((r, i) => (
-                <li key={r.id} className={`rounded-2xl bg-navy p-4 ring-1 ring-white/8 ${r.active ? "" : "opacity-55"}`}>
+                <li key={r.id} className={`min-w-0 rounded-2xl bg-navy p-4 ring-1 ring-white/8 ${r.active ? "" : "opacity-55"}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <span className="grid size-7 shrink-0 place-items-center rounded-full bg-white/8 text-xs font-semibold tabular-nums text-mist">{ruleFrom + i + 1}</span>
                     <div className="min-w-0 flex-1">
@@ -460,7 +461,8 @@ export function Panel({
                             </span>
                           ))}
                       </div>
-                      <p className="mt-2 whitespace-pre-line break-words text-sm">{r.dm_text}</p>
+                      {/* "anywhere", not break-words: a long link without spaces must not set the card's minimum width */}
+                      <p className="mt-2 whitespace-pre-line text-sm [overflow-wrap:anywhere]">{r.dm_text}</p>
                       <p className="mt-2 text-xs text-mist">
                         {r.media_url ? (
                           <>
@@ -581,7 +583,7 @@ export function Panel({
                   <span className="font-medium">@{e.username || "?"}</span>
                   <span className="min-w-0 flex-1 truncate text-mist">{e.comment_text}</span>
                   <span className="text-xs text-mist">{when(e.created_at)}</span>
-                  {e.error && <span className={`w-full break-words text-xs ${e.status === "failed" ? "text-[#ff9b85]" : "text-mist"}`}>{e.error}</span>}
+                  {e.error && <span className={`w-full text-xs [overflow-wrap:anywhere] ${e.status === "failed" ? "text-[#ff9b85]" : "text-mist"}`}>{e.error}</span>}
                 </li>
               ))}
             </ul>

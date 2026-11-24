@@ -327,6 +327,8 @@ export class GraphFail extends Error {
 }
 
 type FailKind = "token" | "retry" | "final";
+/** "The thread owner has archived or deleted this conversation" (code 100, subcode 2534001). */
+const isThreadRefusal = (e: unknown) => e instanceof GraphFail && e.code === 100 && /archived or deleted|arşivledi veya sildi|2534001/i.test(e.message);
 /** Rate limits, Meta's temporary errors and network problems are retried; a bad token raises an alert. */
 function failKind(e: unknown): FailKind {
   if (e instanceof GraphFail) {
@@ -336,6 +338,10 @@ function failKind(e: unknown): FailKind {
     if ((e.code === 10 || e.code === 200 || /permission/i.test(e.message)) && !/window|outside/i.test(e.message)) return "token";
     if ([1, 2, 4, 17, 32, 341, 613, 80002, 80006].includes(e.code ?? -1) || (e.status ?? 0) >= 500 || e.status === 429) return "retry";
     if (/rate|limit|temporar|try again|unavailable/i.test(e.message)) return "retry";
+    // "the thread owner has archived or deleted this conversation" is also what Meta answers to every new
+    // conversation while it is throttling the account. Retried with the usual backoff; someone who really closed
+    // their DMs runs out of tries and is given up then.
+    if (isThreadRefusal(e)) return "retry";
     return "final";
   }
   // fetch timeouts and dropped connections
@@ -347,11 +353,31 @@ function failKind(e: unknown): FailKind {
 // calls made while waiting count too. So after such an answer all sending stops for a few minutes (the queue keeps
 // the comments, no attempt is spent), and the first send after the pause tests the water. Kept in memory: after a
 // restart the first refused call sets it again.
-const LIMIT_PAUSE_MIN = 3;
+// After a refusal sending stops for 15 minutes (30 if refused again soon after): an account that keeps sending into
+// the limit stays limited, and every refused call counts on Meta's meter too.
+const LIMIT_PAUSE_MIN = 15;
+// Pacing: at most this many DMs an hour (first messages, "follow" messages and links alike), evenly spaced; the rest
+// waits in the queue for its slot. Instagram throttles an account far below Meta's documented 750 private replies an
+// hour and does not say where: in our use it started refusing at about 150 to 200 an hour, and 130 ran clean.
+// DM_PACE_PER_HOUR in the environment changes it; 0 turns pacing off.
+const DM_PACE_PER_HOUR = Math.max(0, Math.min(750, Number(process.env.DM_PACE_PER_HOUR ?? 130) || 0));
+const DM_GAP_MS = DM_PACE_PER_HOUR ? 3_600_000 / DM_PACE_PER_HOUR : 0;
+// How long one run may wait for paced slots: a serverless function (Vercel, 60 s) has room for one slot, a regular
+// server's two-minute tick for a few. A "followed" tap's link may wait this long for its booked slot.
+const SERVERLESS = Boolean(process.env.VERCEL);
+const RUN_WAIT_MS = SERVERLESS ? 35_000 : 100_000;
+const TAP_WAIT_MS = SERVERLESS ? 30_000 : 3 * 60_000;
 // One shared state for every copy of this module in the build (instrumentation, routes and server actions each get
 // their own copy), so a pause or a Page-token change made in one is seen by all.
 type SendState = {
   limitedUntil: number;
+  /** when Meta last refused a call for the limit (a refusal soon after a pause doubles the next pause) */
+  limitHitAt?: number;
+  pauseStep?: number;
+  /** when the next paced DM may go (this instance's view; the last send in the database is looked at too) */
+  nextDmAt?: number;
+  /** recent "conversation archived or deleted" refusals (Instagram throttling the account shows up as these) */
+  threadRefusals?: { at: number; id: number }[];
   /** the Page token was refused (190): calls go with the saved token until a new one is found */
   pageOff: boolean;
   pageAskedAt: number;
@@ -377,9 +403,44 @@ export const metaLimitedMin = () => Math.max(0, Math.ceil((G.limitedUntil - Date
 export function clearMetaPause() {
   G.limitedUntil = 0;
 }
-function pauseForLimit(min = LIMIT_PAUSE_MIN) {
-  G.limitedUntil = Math.max(G.limitedUntil, Date.now() + min * 60_000);
+function pauseForLimit(min?: number) {
+  const now = Date.now();
+  // several calls refused in one burst: one pause, not one step per refusal
+  if (now < G.limitedUntil) return;
+  // refused again soon after the last pause ended: the meter is still full, so the next pause is twice as long
+  G.pauseStep = now - (G.limitHitAt ?? 0) < 45 * 60_000 ? Math.min((G.pauseStep ?? 0) + 1, 1) : 0;
+  G.limitHitAt = now;
+  G.limitedUntil = now + (min ?? LIMIT_PAUSE_MIN * 2 ** G.pauseStep) * 60_000;
 }
+/**
+ * Milliseconds until the next paced DM may go (0: now). Looks at this instance's own slot and at the last DM in the
+ * database, so serverless instances that share no memory keep the same pace.
+ */
+async function dmSlotWait(): Promise<number> {
+  if (!DM_GAP_MS) return 0;
+  const mem = Math.max(0, (G.nextDmAt ?? 0) - Date.now());
+  const [row] = await query<{ ms: string | null }>("SELECT EXTRACT(EPOCH FROM (now() - max(sent_at))) * 1000 AS ms FROM ig_events WHERE sent_at > now() - interval '15 minutes'");
+  const db = row?.ms == null ? 0 : Math.max(0, DM_GAP_MS - Number(row.ms));
+  return Math.max(mem, db);
+}
+/** Takes the next DM slot if it is free; false means this DM waits for a later one. */
+async function takeDmSlot(): Promise<boolean> {
+  if (!DM_GAP_MS) return true;
+  if ((await dmSlotWait()) > 0) return false;
+  G.nextDmAt = Date.now() + DM_GAP_MS;
+  return true;
+}
+/**
+ * Books the next free slot for a "followed" tap's link and says how long to wait for it. Booked ahead, so the link
+ * does not lose the slot to a waiting first message.
+ */
+async function bookDmSlot(): Promise<number> {
+  if (!DM_GAP_MS) return 0;
+  const wait = await dmSlotWait();
+  G.nextDmAt = Date.now() + wait + DM_GAP_MS;
+  return wait;
+}
+const PACED_NOTE = `Sırada: DM'ler saatte ${DM_PACE_PER_HOUR} ile aralıklı gidiyor.`;
 
 // ---------- the Page's token ----------
 // Meta counts a call by the kind of token it carries: a Facebook user token goes against the app's own allowance
@@ -452,8 +513,8 @@ async function withPageToken(s: IgSettings): Promise<IgSettings> {
       next.pageToken = page.access_token;
       next.pageNote = `İstekler "${page.name ?? page.id}" sayfasının token'ı ile gidiyor (Meta'nın geniş Instagram sınırı).${shortNote}`;
       G.pageOff = false;
-      G.limitedUntil = 0;
-      // everything that waited goes out now
+      // (a pause for Meta's limit stays: the Page token's calls fill the same app meter)
+      // everything that waited goes out now, or when the pause ends
       await execute("UPDATE ig_events SET next_try_at = now() WHERE status IN ('retry','tapped')");
     } else {
       const seen = list.map((p) => `${p.name ?? p.id}${p.instagram_business_account ? "" : " (Instagram bağlı değil)"}`).join(", ");
@@ -812,7 +873,11 @@ export async function handleComment(accountId: string, c: CommentChange) {
   }
 
   const [row] = await query<EventRow>(`SELECT ${EVENT_COLUMNS} FROM ig_events WHERE id = ?`, [eventId]);
-  if (row) await deliver(row, rule);
+  if (!row) return;
+  // first come, first served: while older comments or taps wait in the queue, a new one joins the end of it
+  const [{ n: waiting }] = await query<{ n: string }>("SELECT COUNT(*) AS n FROM ig_events WHERE status IN ('retry','tapped') AND id < ?", [row.id]);
+  if (Number(waiting) > 0) return retry(row, PACED_NOTE, 0, false);
+  await deliver(row, rule);
 }
 
 /** Sends the DM (and the public answer) for one claimed event; on a passing problem it goes back to the queue. */
@@ -822,14 +887,15 @@ async function deliver(ev: EventRow, rule: IgRule) {
   // Meta refused a call for the request limit a moment ago: wait it out without spending more calls or an attempt
   const held = () => retry(ev, "Meta'nın istek sınırı dolu, sınır açılınca gönderilecek.", metaLimitedMin() + 1, false);
   let s = await readIg();
-  if (metaLimitedMin() && !onPage(s)) return held();
+  // the pause holds whatever token goes: Page-token DMs fill the app's meter too
+  if (metaLimitedMin()) return held();
 
   if (!s.token) return retry(ev, "Instagram bağlı değil (token yok).", 60);
   s = await refreshTokenIfDue(s);
   if (ev.account_id) await learnAccount(s, ev.account_id);
   s = await withPageToken(await readIg());
   const viaPage = onPage(s);
-  if (metaLimitedMin() && !viaPage) return held();
+  if (metaLimitedMin()) return held();
 
   // stay under Meta's hourly cap; the rest waits in the queue (not counted as a failed attempt)
   const [{ n: sentLastHour }] = await query<{ n: string }>("SELECT COUNT(*) AS n FROM ig_events WHERE sent_at > now() - interval '1 hour'");
@@ -855,13 +921,16 @@ async function deliver(ev: EventRow, rule: IgRule) {
         if (isRateLimit(e)) pauseForLimit();
         return {} as { is_user_follow_business?: boolean };
       });
-      if (metaLimitedMin() && !viaPage) return held();
+      if (metaLimitedMin()) return held();
       if (p.is_user_follow_business === true) {
         gated = false;
         await rememberFollower(ev.ig_user_id);
       }
     }
   }
+  // paced: one DM per slot; this comment waits in the queue for a later one (not a failed attempt)
+  // (due at once: the queue waits for the slot itself, so arrival order is kept)
+  if (!(await takeDmSlot())) return retry(ev, PACED_NOTE, 0, false);
   const gateText = rule.gate_text || DEFAULT_GATE_TEXT;
   const messages = gated ? [gateMessage(gateText, ev.id), gatePlain(gateText)] : [{ text: rule.dm_text }];
   const notes: string[] = [];
@@ -875,6 +944,7 @@ async function deliver(ev: EventRow, rule: IgRule) {
         const res = await graph<Record<string, unknown>>(`/${encodeURIComponent(who!)}/messages`, { token: tok(s), host: s.host, method: "POST", body });
         if (res.message_id) {
           delivered = true;
+          G.threadRefusals = [];
           break send;
         }
         notes.push(`${who}: ${JSON.stringify(res).slice(0, 160)}`);
@@ -885,6 +955,22 @@ async function deliver(ev: EventRow, rule: IgRule) {
           return held();
         }
         notes.push(`${who}: ${(e as Error).message}`);
+        // Instagram throttling the account: three "conversation archived or deleted" refusals for different people
+        // within ten minutes, with no delivery between, stop all sending for half an hour (one closed inbox now and
+        // then never adds up to three; a delivery starts the count again)
+        if (isThreadRefusal(e)) {
+          const now = Date.now();
+          G.threadRefusals = [...(G.threadRefusals ?? []).filter((x) => now - x.at < 10 * 60_000 && x.id !== ev.id), { at: now, id: ev.id }];
+          if (G.threadRefusals.length >= 3) {
+            G.threadRefusals = [];
+            pauseForLimit(30);
+            await alert("busy", "Instagram DM: Instagram hesabı kısıyor (art arda \"yazışma arşivlendi\" reddi). Gönderim 30 dakika durdu, yorumlar kuyrukta.", 60);
+            return held();
+          }
+          // not the path or the message's shape: no second path, no plain variant
+          if (kind !== "token") kind = "retry";
+          break;
+        }
         if (who === "me" || !viaPage) await pageTokenFailed(s, e);
         const k = failKind(e);
         if (k === "token" || (k === "retry" && kind !== "token")) kind = k;
@@ -952,14 +1038,18 @@ export async function requeuePermissionFailures() {
      WHERE status = 'failed' AND created_at > now() - interval '2 days'
        AND error ILIKE 'DM teslim edilmedi:%permission%'`,
   );
+  // given up on as "conversation archived or deleted" while Meta was throttling the account: they go again (once;
+  // this answer is retried now, and a give-up after the retries reads "Tekrar denemeler bitti")
+  await execute(
+    `UPDATE ig_events SET status = 'retry', attempts = 0, next_try_at = now(), error = 'Meta kısıtlarken reddedilmişti, yeniden sıraya alındı.'
+     WHERE status = 'failed' AND created_at > now() - interval '2 days'
+       AND error LIKE 'DM teslim edilmedi:%' AND (error ILIKE '%arşivledi veya sildi%' OR error ILIKE '%archived or deleted%')`,
+  );
 }
-
-/** How many queued comments are sent side by side: each waits on Meta two or three times, one by one would take minutes. */
-const QUEUE_BATCH = 8;
 
 /**
  * Sends what is waiting in the queue: taps whose link is due first, then the comments that wait for their first
- * message (newest first), and sends a restart left half done. Runs after each webhook call, when the panel opens,
+ * message (oldest first, one per paced slot), and sends a restart left half done. Runs after each webhook call, when the panel opens,
  * from the scheduled job (/api/cron) and, on a regular server, every two minutes. A row is claimed before it is
  * sent, so two runs at once never send the same DM twice.
  */
@@ -974,13 +1064,24 @@ export async function processQueue(limit = 40) {
     // First the people who did what was asked: they tapped "followed" and only the link is missing. That is a tap
     // that could not be answered while Meta's limit was full, or one whose answer failed (tried a few times).
     const taps = await query<TapEvent & { ig_user_id: string; rule_id: number; status: string }>(
-      `SELECT * FROM ig_events WHERE (status = 'tapped' AND next_try_at <= now())
-         OR (status = 'gated' AND error LIKE 'Takip sonrası mesaj gitmedi:%' AND gate_tries < ? AND created_at > now() - interval '1 day')
-       ORDER BY id LIMIT ?`,
+      // rows the loop below would skip (no messaging id) are not selected at all: left in the list they took the
+      // places by age and newer taps never came up; waiting links ('tapped') come first
+      `SELECT * FROM ig_events WHERE ((status = 'tapped' AND next_try_at <= now())
+         OR (status = 'gated' AND error LIKE 'Takip sonrası mesaj gitmedi:%' AND gate_tries < ? AND created_at > now() - interval '1 day'))
+         AND ig_user_id IS NOT NULL AND ig_user_id <> '' AND ig_user_id NOT LIKE 'u:%'
+       ORDER BY (status = 'tapped') DESC, id LIMIT ?`,
       [MAX_GATE_TRIES, limit],
     );
+    // Paced: each DM waits for its slot inside this run for a limited time; what does not fit goes in the next run.
+    const until = Date.now() + RUN_WAIT_MS;
+    const slotFree = async () => {
+      const w = await dmSlotWait();
+      if (Date.now() + w > until) return false;
+      if (w) await new Promise((r) => setTimeout(r, w));
+      return !metaLimitedMin();
+    };
     for (const ev of taps) {
-      if (metaLimitedMin() && !onPage(await readIg())) break;
+      if (!(await slotFree())) break;
       if (!ev.ig_user_id || ev.ig_user_id.startsWith("u:")) continue;
       const claim = await execute("UPDATE ig_events SET status = 'sending', claimed_at = now() WHERE id = ? AND status = ?", [ev.id, ev.status]);
       if (!claim.count) continue;
@@ -991,8 +1092,9 @@ export async function processQueue(limit = 40) {
       }
       await answerTap(ev, rule, await readIg(), ev.ig_user_id);
     }
-    // then the comments that wait for their first message, newest first, a few side by side
-    const due = await query<EventRow>(`SELECT ${EVENT_COLUMNS} FROM ig_events WHERE status = 'retry' AND next_try_at <= now() ORDER BY id DESC LIMIT ?`, [limit]);
+    // then the comments that wait for their first message, oldest first: with pacing the queue can be long, and a
+    // newest-first order would leave early commenters waiting
+    const dueNow = () => query<EventRow>(`SELECT ${EVENT_COLUMNS} FROM ig_events WHERE status = 'retry' AND next_try_at <= now() ORDER BY id LIMIT ?`, [limit]);
     const one = async (ev: EventRow) => {
       const claim = await execute("UPDATE ig_events SET status = 'sending', claimed_at = now() WHERE id = ? AND status = 'retry'", [ev.id]);
       if (!claim.count) return;
@@ -1000,8 +1102,16 @@ export async function processQueue(limit = 40) {
       if (!rule || !rule.active) return void (await setEvent(ev.id, "failed", "Kural silindi ya da kapatıldı."));
       await deliver(ev, rule);
     };
-    for (let i = 0; i < due.length; i += QUEUE_BATCH)
-      await Promise.all(due.slice(i, i + QUEUE_BATCH).map((ev) => one(ev).catch((e) => console.error("[instagram kuyruk]", e))));
+    // one at a time on the paced slots, stopping at a refusal. Comments that joined the queue while this run was
+    // waiting for a slot are picked up too, as long as the run has time left.
+    run: for (let pass = 0; pass < 20; pass++) {
+      const due = await dueNow();
+      if (!due.length) break;
+      for (const ev of due) {
+        if (!(await slotFree())) break run;
+        await one(ev).catch((e) => console.error("[instagram kuyruk]", e));
+      }
+    }
   } catch (e) {
     console.error("[instagram kuyruk]", e);
   } finally {
@@ -1101,15 +1211,21 @@ const TAP_WAITS = "Takip ettim dedi; Meta'nın istek sınırı dolu, sınır aç
  * row waits as 'tapped' and the queue answers it once the limit opens.
  */
 async function answerTap(ev: TapEvent, rule: IgRule, s: IgSettings, sender: string) {
-  const later = () =>
+  const later = (note = TAP_WAITS) =>
     execute("UPDATE ig_events SET status = 'tapped', ig_user_id = ?, next_try_at = now() + make_interval(mins => ?), error = ? WHERE id = ?", [
       sender.slice(0, 40),
       Math.max(1, metaLimitedMin()),
-      TAP_WAITS,
+      note,
       ev.id,
     ]);
   s = await withPageToken(s);
-  if (metaLimitedMin() && !onPage(s)) return later();
+  if (metaLimitedMin()) return later();
+  // the link is a DM too and takes a paced slot. Several taps at once book consecutive slots; one that would wait
+  // too long goes back to the queue, which answers taps first.
+  if ((await dmSlotWait()) > TAP_WAIT_MS) return later(`Takip ettim dedi; ${PACED_NOTE}`);
+  const wait = await bookDmSlot();
+  if (wait) await new Promise((r) => setTimeout(r, wait));
+  if (metaLimitedMin()) return later();
   const who = onPage(s) ? "me" : ev.account_id || s.userId || "me";
   const sendDm = (message: object) =>
     graph<Record<string, unknown>>(`/${encodeURIComponent(who)}/messages`, {

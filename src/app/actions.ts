@@ -179,6 +179,6 @@ export async function flushIgQueue(): Promise<IgState> {
   await processQueue(100);
   const { queued } = await hourStats();
   return queued
-    ? { ok: true, message: `${queued} yorum hâlâ kuyrukta: Meta şu an kabul etmedi, birkaç dakika içinde yeniden denenecek.` }
+    ? { ok: true, message: `${queued} yorum hâlâ kuyrukta: DM'ler aralıklı gidiyor (ya da Meta şu an kabul etmedi); sıradakiler kendiliğinden gönderilecek.` }
     : { ok: true, message: "Kuyruk boşaldı, bekleyenlerin hepsine gönderildi." };
 }
