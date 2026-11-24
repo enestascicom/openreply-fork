@@ -135,6 +135,10 @@ bir kez çalıştırır; ama her yeni yorum ve paneli her açışın da sırayı
 
 ## Sürüm notları
 
+**1.5.1 (24 Kasım 2026)**
+
+- Sunucu kayıtlarına (Vercel → Logs) her webhook çağrısı için hangi bildirimin geldiği, her gelen DM için de ne yapıldığı tek satır olarak yazılıyor (mesaj içeriği yazılmaz). "Takip ettim"e basıldı ama link gitmedi gibi durumlarda bildirimin gelip gelmediği ve neden atlandığı oradan görülür.
+
 **1.5.0 (24 Kasım 2026)**
 
 - **Aralıklı gönderim.** DM'ler artık saatte en çok 130 olacak şekilde eşit aralıklarla gider (yaklaşık 28 saniyede bir); ilk mesaj, "takip et" mesajı ve link aynı sıraya girer. Instagram bir hesabı Meta'nın yazdığı saatlik 750'nin çok altında kısıyor ve bunu söylemiyor: bizde saatte 150 ila 200'de reddetmeye başladı, 130 sorunsuz gitti. Rakam `DM_PACE_PER_HOUR` ortam değişkeniyle değişir, `0` aralığı kapatır. Son gönderim veritabanından okunduğu için Vercel gibi sunucusuz ortamlarda da aynı hız korunur.

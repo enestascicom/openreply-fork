@@ -1166,9 +1166,14 @@ type GatedRow = IgEvent & { ig_user_id: string; account_id: string; gate_tries: 
  */
 export async function handleMessage(accountId: string, m: IncomingMessage) {
   const sender = m.sender?.id;
-  if (!sender || m.message?.is_echo || sender === accountId) return;
+  // one line per incoming DM in the server log (no message text), so a "followed" tap that does not arrive or is
+  // dropped can be told apart in the host's logs
+  const pl = m.message?.quick_reply?.payload ?? m.postback?.payload ?? "";
+  const why = (r: string) => console.log(`[instagram mesaj] ${pl ? `düğme ${pl}` : m.message?.text ? "yazı" : "diğer"}: ${r}`);
+  if (!sender || m.message?.is_echo || sender === accountId) return void why("kendi mesajımız ya da gönderen yok, atlandı");
   const s = await readIg();
-  if (!s.token || (s.userId && accountId && accountId !== s.userId)) return;
+  if (!s.token) return void why("token yok, atlandı");
+  if (s.userId && accountId && accountId !== s.userId) return void why(`başka hesaba gelmiş (webhook hesabı ${accountId}, kayıtlı hesap ${s.userId}), atlandı`);
 
   // which comment this is about: the button carries its row id; a typed answer is matched to the person
   const payload = m.message?.quick_reply?.payload ?? m.postback?.payload ?? "";
@@ -1177,7 +1182,7 @@ export async function handleMessage(accountId: string, m: IncomingMessage) {
   if (tapped) {
     [ev] = await query<GatedRow>("SELECT * FROM ig_events WHERE id = ? AND status = 'gated'", [Number(tapped[1])]);
     // a tap on a row already answered (a second tap after the link went): nothing to do, no call to Meta
-    if (!ev) return;
+    if (!ev) return void why("bu kayıt takip beklemiyor (zaten cevaplanmış), atlandı");
   } else {
     // read receipts, reactions and the like carry no text: never a "followed" answer
     if (!m.message?.text) return;
@@ -1195,7 +1200,8 @@ export async function handleMessage(accountId: string, m: IncomingMessage) {
 
   // claim it, so two quick taps never send the link twice
   const claim = await execute("UPDATE ig_events SET status = 'sending', claimed_at = now() WHERE id = ? AND status = 'gated'", [ev.id]);
-  if (!claim.count) return;
+  if (!claim.count) return void why("başka bir istek zaten cevaplıyor");
+  why(`kayıt ${ev.id} için link gönderiliyor`);
   const [rule] = await query<IgRule>("SELECT * FROM ig_rules WHERE id = ?", [ev.rule_id]);
   if (!rule || !rule.active) return setEvent(ev.id, "failed", "Kural silindi ya da kapatıldı.");
 

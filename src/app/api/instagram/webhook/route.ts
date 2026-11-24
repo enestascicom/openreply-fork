@@ -66,6 +66,9 @@ export async function POST(req: NextRequest) {
     // DMs to us: only the "followed" taps of follow-gated rules are acted on
     for (const m of Array.isArray(entry.messaging) ? entry.messaging : []) messages.push([String(entry.id ?? ""), m]);
   }
+  // one line per call (no content): which kinds of notification Meta sent, so a missing one shows in the host's logs
+  const fields = [...new Set((payload.entry ?? []).flatMap((e) => [...(e.changes ?? []).map((c) => c.field ?? "?"), ...(Array.isArray(e.messaging) ? ["messaging"] : [])]))];
+  console.log(`[instagram webhook] ${comments.length} yorum, ${messages.length} mesaj (${fields.join(", ") || "boş"})`);
   after(async () => {
     for (const [account, c] of comments.slice(0, MAX_COMMENTS)) await handleComment(account, c).catch((e) => console.error("[instagram webhook]", e));
     for (const [account, m] of messages.slice(0, MAX_COMMENTS)) await handleMessage(account, m).catch((e) => console.error("[instagram webhook]", e));
